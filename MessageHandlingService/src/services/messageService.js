@@ -35,7 +35,7 @@ class MessageService {
       case 'message.deleted':
         // Handle message deletion
         if (message.messageId) {
-          await MessageModel.delete(message.messageId);
+          await MessageModel.deleteMessage(message.messageId);
         }
         break;
         
@@ -62,7 +62,7 @@ class MessageService {
       }
       
       // Save message to database
-      const savedMessage = await MessageModel.create(messageData);
+      const savedMessage = await MessageModel.createMessage(messageData);
       
       // Cache message in Redis
       await RedisService.cacheMessage(savedMessage);
@@ -124,7 +124,7 @@ class MessageService {
       
       // If cache miss or not enough messages in cache, get from database
       console.log(`Cache miss for room ${roomId}, fetching from database`);
-      const messages = await MessageModel.getByRoom(roomId, limit, offset);
+      const messages = await MessageModel.getRoomMessages(roomId, limit, offset);
       
       // Cache these messages for future requests
       for (const message of messages) {
@@ -216,7 +216,7 @@ class MessageService {
       }
       
       // Delete from database
-      const deletedMessage = await MessageModel.delete(messageId);
+      const deletedMessage = await MessageModel.deleteMessage(messageId);
       
       // Publish event to RabbitMQ
       await RabbitMQService.publishMessage('message.deleted', {
