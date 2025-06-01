@@ -2,6 +2,8 @@
     import './roomStyles.css';
     import { onMount, onDestroy } from 'svelte';
     import io from 'socket.io-client';
+    import { user, isAuthenticated } from '$lib/stores/user';
+    import { goto } from '$app/navigation';
 
     export let data: {
         roomName: string;
@@ -13,7 +15,7 @@
     let socket: any;
     let isConnecting = true;
     let connectionError = false;
-    let username = 'User_' + Math.floor(Math.random() * 1000); // Mock username
+    let username = $user?.username || 'Guest';
     let useMockData = false; // Try to connect to the real backend first
 
     // Mock messages for testing
@@ -45,6 +47,12 @@
     ];
 
     onMount(async () => {
+        // Check if user is authenticated
+        if (!$isAuthenticated) {
+            goto('/');
+            return;
+        }
+
         try {
             if (useMockData) {
                 // Use mock data
@@ -69,10 +77,10 @@
             socket.on('connect', () => {
                 console.log('Socket connected successfully');
                 
-                // Authenticate (simplified for testing)
+                // Authenticate with user ID from store
                 socket.emit('authenticate', { 
-                    userId: username, 
-                    token: 'test-token' 
+                    userId: $user?.id || username, 
+                    username: $user?.display_name || $user?.username || username
                 });
             });
 
@@ -206,7 +214,7 @@
     }
 
     function isUserMessage(message: any): boolean {
-        return message.sender_id === username;
+        return message.sender_id === ($user?.id || username);
     }
 
     function getDisplayContent(message: any): string {
@@ -214,6 +222,9 @@
     }
 
     function getDisplayName(message: any): string {
+        if (message.sender_id === ($user?.id || username)) {
+            return 'You';
+        }
         return message.sender || message.sender_id || 'Unknown';
     }
 

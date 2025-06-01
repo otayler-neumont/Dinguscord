@@ -2,22 +2,22 @@
         import './SignIn/form.css';
         import { onMount } from 'svelte';
         import { signIn } from '@auth/sveltekit/client';
-        import { user } from '$lib/stores/user';
+        import { user, register, login, logout, isAuthenticated } from '$lib/stores/user';
         import {goto} from "$app/navigation";
-        import type { User } from '$lib/stores/user';
 
-        let currentUser: User | null = null;
         let container: HTMLElement;
         let isModalOpen = false;
         let resetEmail = '';
+        let errorMessage = '';
+        let loading = false;
 
         // Form inputs
+        let signUpUsername = '';
         let signUpName = '';
         let signUpEmail = '';
         let signUpPassword = '';
         let signInEmail = '';
         let signInPassword = '';
-
 
         function openModal() {
             isModalOpen = true;
@@ -41,39 +41,77 @@
         }
 
         async function handleSignUp() {
-            if (!signUpName || !signUpEmail || !signUpPassword) return;
-            // Simulate account creation
-            user.set({ name: signUpName, email: signUpEmail });
-            await goto('/dashboard');
+            if (!signUpUsername || !signUpEmail || !signUpPassword) {
+                errorMessage = 'All fields are required';
+                return;
+            }
+            
+            loading = true;
+            errorMessage = '';
+            
+            try {
+                const result = await register({
+                    username: signUpUsername,
+                    email: signUpEmail,
+                    password: signUpPassword,
+                    display_name: signUpName || undefined
+                });
+                
+                if (result.success) {
+                    await goto('/dashboard');
+                } else {
+                    errorMessage = result.message || 'Registration failed';
+                }
+            } catch (error) {
+                console.error('Error during registration:', error);
+                errorMessage = 'An unexpected error occurred';
+            } finally {
+                loading = false;
+            }
         }
 
         async function handleSignIn() {
-            if (!signInEmail || !signInPassword) return;
-            user.set({ name: signInEmail.split('@')[0], email: signInEmail });
-            await goto('/dashboard');
+            if (!signInEmail || !signInPassword) {
+                errorMessage = 'Email and password are required';
+                return;
+            }
+            
+            loading = true;
+            errorMessage = '';
+            
+            try {
+                const result = await login({
+                    email: signInEmail,
+                    password: signInPassword
+                });
+                
+                if (result.success) {
+                    await goto('/dashboard');
+                } else {
+                    errorMessage = result.message || 'Login failed';
+                }
+            } catch (error) {
+                console.error('Error during login:', error);
+                errorMessage = 'An unexpected error occurred';
+            } finally {
+                loading = false;
+            }
         }
-
 
         onMount(() => {
             document.getElementById('signUp')?.addEventListener('click', () => {
                 container?.classList.add('right-panel-active');
+                errorMessage = '';
             });
             document.getElementById('signIn')?.addEventListener('click', () => {
                 container?.classList.remove('right-panel-active');
+                errorMessage = '';
             });
-        });
-
-
-        onMount(() => {
-            const signUpButton = document.getElementById('signUp');
-            const signInButton = document.getElementById('signIn');
-
-            signUpButton?.addEventListener('click', () => {
-                container?.classList.add('right-panel-active');
-            });
-            signInButton?.addEventListener('click', () => {
-                container?.classList.remove('right-panel-active');
-            });
+            
+            // Check if user is already authenticated
+            if ($isAuthenticated) {
+                goto('/dashboard');
+            }
         });
 
         const handleSocialLogin = async (provider: 'facebook' | 'google') => {
@@ -93,22 +131,28 @@
     <h2>Welcome To DingusCord</h2>
     <div bind:this={container} class="container" id="container">
         <div class="form-container sign-up-container">
-            <form>
+            <form on:submit|preventDefault={handleSignUp}>
                 <h1>Create Account</h1>
                 <div class="social-container">
                     <button type="button" class="social" aria-label="Sign in with Facebook" on:click={() => handleSocialLogin('facebook')}><i class="fab fa-facebook-f"></i></button>
                     <button type="button" class="social" aria-label="Sign in with Google" on:click={() => handleSocialLogin('google')}><i class="fab fa-google-plus-g"></i></button>
                 </div>
                 <span>or use your email for registration</span>
-                <input type="text" placeholder="Name" bind:value={signUpName} />
+                <input type="text" placeholder="Username" bind:value={signUpUsername} />
+                <input type="text" placeholder="Display Name (optional)" bind:value={signUpName} />
                 <input type="email" placeholder="Email" bind:value={signUpEmail} />
                 <input type="password" placeholder="Password" bind:value={signUpPassword} />
-                <button type="button" on:click={handleSignUp}>Sign Up</button>
+                {#if errorMessage}
+                    <div class="error-message">{errorMessage}</div>
+                {/if}
+                <button type="submit" disabled={loading}>
+                    {loading ? 'Processing...' : 'Sign Up'}
+                </button>
             </form>
         </div>
 
         <div class="form-container sign-in-container">
-            <form>
+            <form on:submit|preventDefault={handleSignIn}>
                 <h1>Sign in</h1>
                 <div class="social-container">
                     <button type="button" class="social" aria-label=" Facebook" on:click={() => handleSocialLogin('facebook')}><i class="fab fa-facebook-f"></i></button>
@@ -118,7 +162,12 @@
                 <input type="email" placeholder="Email" bind:value={signInEmail} />
                 <input type="password" placeholder="Password" bind:value={signInPassword} />
                 <a href="#" on:click|preventDefault={openModal}>Forgot your password?</a>
-                <button type="button" on:click={handleSignIn}>Sign In</button>
+                {#if errorMessage}
+                    <div class="error-message">{errorMessage}</div>
+                {/if}
+                <button type="submit" disabled={loading}>
+                    {loading ? 'Processing...' : 'Sign In'}
+                </button>
             </form>
         </div>
 
@@ -172,5 +221,14 @@
             <a href="/privacy">Privacy Policy</a>
         </p>
     </footer>
+
+<style>
+    .error-message {
+        color: #e74c3c;
+        font-size: 14px;
+        margin: 5px 0;
+        text-align: center;
+    }
+</style>
 
 

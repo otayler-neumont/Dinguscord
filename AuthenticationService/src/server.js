@@ -1,8 +1,10 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcrypt');
+
+// Import controllers and middleware
+const authController = require('./controllers/authController');
+const authMiddleware = require('./middleware/authMiddleware');
 
 // Load environment variables
 require('dotenv').config();
@@ -25,20 +27,25 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Simple API routes - to be expanded
-app.post('/auth/login', (req, res) => {
-  res.status(501).json({ message: 'Not implemented yet' });
-});
+// Auth routes
+app.post('/auth/register', authController.register);
+app.post('/auth/login', authController.login);
+app.get('/auth/verify', authMiddleware.authenticateToken, authController.verifyToken);
 
-app.post('/auth/register', (req, res) => {
-  res.status(501).json({ message: 'Not implemented yet' });
-});
+// User routes (protected)
+app.get('/auth/profile', authMiddleware.authenticateToken, authController.getProfile);
+app.put('/auth/profile', authMiddleware.authenticateToken, authController.updateProfile);
+app.post('/auth/password', authMiddleware.authenticateToken, authController.changePassword);
 
+// Password reset (public)
 app.post('/auth/password-reset', (req, res) => {
+  // To be implemented
   res.status(501).json({ message: 'Not implemented yet' });
 });
 
+// Get user by ID (can be used by other services)
 app.get('/auth/user/:id', (req, res) => {
+  // To be implemented
   res.status(501).json({ message: 'Not implemented yet' });
 });
 
