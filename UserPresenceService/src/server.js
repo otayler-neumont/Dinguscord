@@ -18,7 +18,7 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3000;
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+const REDIS_URL = process.env.REDIS_URL || 'redis://redis:6379';
 const redis = new Redis(REDIS_URL);
 
 // Middleware
