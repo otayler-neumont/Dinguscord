@@ -130,6 +130,19 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  frontend:
+    build:
+      context: ./DingusGui
+      dockerfile: Dockerfile.dev
+    ports:
+      - "5173:5173"
+    environment:
+      - NODE_ENV=development
+    volumes:
+      - ./DingusGui/DingusMessaging:/app:delegated
+      - /app/node_modules
+    restart: unless-stopped
+
   api-gateway:
     build:
       context: ./ApiGateway

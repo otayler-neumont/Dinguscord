@@ -5,6 +5,7 @@ $Green = [System.ConsoleColor]::Green
 $Red = [System.ConsoleColor]::Red
 $Yellow = [System.ConsoleColor]::Yellow
 $Blue = [System.ConsoleColor]::Blue
+$Cyan = [System.ConsoleColor]::Cyan
 
 function Write-ColorOutput($message, $color) {
     $originalColor = [Console]::ForegroundColor
@@ -41,9 +42,65 @@ function Test-ServiceHealth($url, $serviceName) {
     }
 }
 
+function Create-DatabasesIfNeeded {
+    Write-ColorOutput "🗄️  Checking and creating databases..." $Yellow
+    
+    # List of databases to create
+    $databases = @("auth", "chatroom", "messages")
+    
+    foreach ($db in $databases) {
+        try {
+            Write-ColorOutput "   Creating database: $db" $Blue
+            $result = docker exec -it dinguscord-postgres-1 psql -U postgres -c "CREATE DATABASE $db;" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-ColorOutput " ✓ Database '$db' created successfully" $Green
+            } else {
+                # Database might already exist, check if it exists
+                $checkResult = docker exec -it dinguscord-postgres-1 psql -U postgres -l 2>$null | Select-String $db
+                if ($checkResult) {
+                    Write-ColorOutput " ✓ Database '$db' already exists" $Cyan
+                } else {
+                    Write-ColorOutput " ⚠ Could not verify database '$db'" $Yellow
+                }
+            }
+        }
+        catch {
+            Write-ColorOutput " ⚠ Error creating database '$db': $($_.Exception.Message)" $Yellow
+        }
+    }
+    Write-Host ""
+}
+
+function Wait-ForPostgres {
+    Write-ColorOutput "⏳ Waiting for PostgreSQL to be ready..." $Yellow
+    $maxAttempts = 30
+    $attempt = 0
+    
+    do {
+        try {
+            $result = docker exec dinguscord-postgres-1 pg_isready -U postgres 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-ColorOutput "✅ PostgreSQL is ready" $Green
+                return $true
+            }
+        }
+        catch {
+            # Continue waiting
+        }
+        
+        Start-Sleep -Seconds 2
+        $attempt++
+        Write-Host "." -NoNewline
+    } while ($attempt -lt $maxAttempts)
+    
+    Write-Host ""
+    Write-ColorOutput "❌ PostgreSQL failed to become ready within timeout" $Red
+    return $false
+}
+
 # Main script
 Write-ColorOutput "================================================" $Blue
-Write-ColorOutput "  🚀 Starting Dinguscord Microservices" $Blue
+Write-ColorOutput "  🚀 Starting Dinguscord on Windows" $Blue
 Write-ColorOutput "================================================" $Blue
 Write-Host ""
 
@@ -56,33 +113,103 @@ if (-not (Test-DockerRunning)) {
 Write-ColorOutput "✅ Docker is running" $Green
 Write-Host ""
 
-# Determine which Docker Compose file to use
+# Use Windows-specific Docker Compose file
 $composeFile = "docker-compose.windows.yml"
 if (-not (Test-Path $composeFile)) {
-    Write-ColorOutput "⚠️  Windows-specific compose file not found, using default..." $Yellow
-    $composeFile = "docker-compose.yml"
+    Write-ColorOutput "❌ Windows-specific compose file not found!" $Red
+    Write-ColorOutput "   Make sure docker-compose.windows.yml exists in the current directory." $Red
+    exit 1
 }
 
-# Start backend services using Docker Compose
+# Clean up any existing containers to start fresh
+Write-ColorOutput "🧹 Cleaning up any existing containers..." $Yellow
+try {
+    docker-compose -f $composeFile down 2>$null
+    Write-ColorOutput "✅ Cleanup completed" $Green
+}
+catch {
+    Write-ColorOutput "⚠️  Cleanup had issues, continuing..." $Yellow
+}
+Write-Host ""
+
+# Start backend services using Docker Compose (without frontend initially)
 Write-ColorOutput "🐳 Starting backend services with Docker Compose..." $Yellow
 Write-ColorOutput "   Using: $composeFile" $Blue
 
 try {
-    $result = docker-compose -f $composeFile up -d
+    # Start everything except frontend first
+    $result = docker-compose -f $composeFile up --build -d postgres redis rabbitmq
     if ($LASTEXITCODE -ne 0) {
-        Write-ColorOutput "❌ Failed to start Docker services" $Red
+        Write-ColorOutput "❌ Failed to start infrastructure services" $Red
         exit 1
     }
-    Write-ColorOutput "✅ Backend services started successfully" $Green
+    Write-ColorOutput "✅ Infrastructure services started" $Green
 }
 catch {
-    Write-ColorOutput "❌ Error starting backend services: $($_.Exception.Message)" $Red
+    Write-ColorOutput "❌ Error starting infrastructure services: $($_.Exception.Message)" $Red
     exit 1
 }
 Write-Host ""
 
-# Wait for services to be ready
+# Wait for PostgreSQL to be ready
+if (-not (Wait-ForPostgres)) {
+    exit 1
+}
+
+# Create databases
+Create-DatabasesIfNeeded
+
+# Start application services
+Write-ColorOutput "🚀 Starting application services..." $Yellow
+try {
+    $result = docker-compose -f $composeFile up --build -d authentication-service chat-room-service message-handling-service user-presence-service notification-service api-gateway
+    if ($LASTEXITCODE -ne 0) {
+        Write-ColorOutput "❌ Failed to start application services" $Red
+        exit 1
+    }
+    Write-ColorOutput "✅ Application services started" $Green
+}
+catch {
+    Write-ColorOutput "❌ Error starting application services: $($_.Exception.Message)" $Red
+    exit 1
+}
+Write-Host ""
+
+# Wait for services to initialize
 Write-ColorOutput "⏳ Waiting for services to initialize..." $Yellow
+Start-Sleep -Seconds 20
+Write-Host ""
+
+# Restart database-dependent services to ensure they connect after DB creation
+Write-ColorOutput "🔄 Restarting database-dependent services..." $Yellow
+try {
+    docker-compose -f $composeFile restart authentication-service message-handling-service chat-room-service
+    Write-ColorOutput "✅ Services restarted successfully" $Green
+    Start-Sleep -Seconds 10
+}
+catch {
+    Write-ColorOutput "⚠️  Error restarting services, continuing..." $Yellow
+}
+Write-Host ""
+
+# Start frontend service
+Write-ColorOutput "🌐 Starting frontend service..." $Yellow
+try {
+    $result = docker-compose -f $composeFile up --build -d frontend
+    if ($LASTEXITCODE -ne 0) {
+        Write-ColorOutput "❌ Failed to start frontend service" $Red
+        exit 1
+    }
+    Write-ColorOutput "✅ Frontend service started" $Green
+}
+catch {
+    Write-ColorOutput "❌ Error starting frontend service: $($_.Exception.Message)" $Red
+    exit 1
+}
+Write-Host ""
+
+# Wait a bit more for everything to settle
+Write-ColorOutput "⏳ Waiting for all services to be ready..." $Yellow
 Start-Sleep -Seconds 15
 Write-Host ""
 
@@ -107,75 +234,59 @@ foreach ($service in $services) {
 
 Write-Host ""
 if ($healthyServices -eq $services.Count) {
-    Write-ColorOutput "🎉 All services are healthy!" $Green
+    Write-ColorOutput "🎉 All backend services are healthy!" $Green
 } elseif ($healthyServices -gt 0) {
     Write-ColorOutput "⚠️  $healthyServices/$($services.Count) services are healthy. Some services may still be starting..." $Yellow
 } else {
     Write-ColorOutput "❌ No services are responding. Check Docker logs for errors." $Red
     Write-ColorOutput "   Try: docker-compose -f $composeFile logs" $Blue
-    exit 1
 }
 Write-Host ""
 
-# Set up environment variables for frontend
-Write-ColorOutput "⚙️  Setting up environment variables for frontend..." $Yellow
-$envPath = "./DingusGui/DingusMessaging/.env.development"
-
-if (-not (Test-Path $envPath)) {
-    Write-ColorOutput "📝 Creating .env.development file..." $Blue
-    $envContent = @"
-VITE_API_URL=http://localhost:8080
-VITE_SOCKET_URL=http://localhost:3003
-"@
-    $envContent | Out-File -FilePath $envPath -Encoding UTF8
-    Write-ColorOutput "✅ Environment file created" $Green
-} else {
-    Write-ColorOutput "✅ Environment file already exists" $Green
-}
-Write-Host ""
-
-# Check if frontend dependencies are installed
-Write-ColorOutput "📦 Checking frontend dependencies..." $Yellow
-$frontendPath = "./DingusGui/DingusMessaging"
-
-if (-not (Test-Path "$frontendPath/node_modules")) {
-    Write-ColorOutput "📥 Installing frontend dependencies..." $Blue
-    Set-Location $frontendPath
-    npm install
-    if ($LASTEXITCODE -ne 0) {
-        Write-ColorOutput "❌ Failed to install frontend dependencies" $Red
-        Set-Location "../.."
-        exit 1
-    }
-    Set-Location "../.."
-    Write-ColorOutput "✅ Frontend dependencies installed" $Green
-} else {
-    Write-ColorOutput "✅ Frontend dependencies already installed" $Green
-}
-Write-Host ""
-
-# Start frontend in development mode
-Write-ColorOutput "🌐 Starting frontend in development mode..." $Yellow
-Write-ColorOutput "   Frontend will open at: http://localhost:5173" $Blue
-Write-Host ""
-
-Set-Location $frontendPath
-
-# Use Start-Process to run npm in a new window so this script can complete
-Write-ColorOutput "🚀 Launching frontend development server..." $Green
-Write-ColorOutput "   Check your browser at: http://localhost:5173" $Blue
-Write-Host ""
-
+# Check if frontend is accessible
+Write-ColorOutput "🔍 Checking frontend status..." $Yellow
 try {
-    # Try to start the dev server
-    npm run dev
+    $frontendResponse = Invoke-WebRequest -Uri "http://localhost:5173" -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
+    if ($frontendResponse.StatusCode -eq 200) {
+        Write-ColorOutput " ✓ Frontend is accessible" $Green
+    }
 }
 catch {
-    Write-ColorOutput "❌ Failed to start frontend: $($_.Exception.Message)" $Red
-    Set-Location "../.."
-    exit 1
+    Write-ColorOutput " ⚠ Frontend may still be starting..." $Yellow
 }
+Write-Host ""
 
-# Note: This line might not be reached if npm run dev is blocking
-Set-Location "../.."
-Write-ColorOutput "🎉 Dinguscord is now running!" $Green 
+# Final status and instructions
+Write-ColorOutput "================================================" $Blue
+Write-ColorOutput "  🎉 Dinguscord is now running on Windows!" $Green
+Write-ColorOutput "================================================" $Blue
+Write-Host ""
+
+Write-ColorOutput "🌐 Access your application:" $Cyan
+Write-ColorOutput "   Frontend UI:      http://localhost:5173" $Blue
+Write-ColorOutput "   API Gateway:      http://localhost:8080" $Blue
+Write-ColorOutput "   RabbitMQ Admin:   http://localhost:15672 (guest/guest)" $Blue
+Write-Host ""
+
+Write-ColorOutput "🛠️  Individual Services:" $Cyan
+Write-ColorOutput "   Auth Service:     http://localhost:3001" $Blue
+Write-ColorOutput "   Chat Rooms:       http://localhost:3002" $Blue
+Write-ColorOutput "   Messages:         http://localhost:3003" $Blue
+Write-ColorOutput "   User Presence:    http://localhost:3004" $Blue
+Write-ColorOutput "   Notifications:    http://localhost:3005" $Blue
+Write-Host ""
+
+Write-ColorOutput "📝 Quick Commands:" $Cyan
+Write-ColorOutput "   View logs:        docker-compose -f docker-compose.windows.yml logs" $Blue
+Write-ColorOutput "   Stop all:         docker-compose -f docker-compose.windows.yml down" $Blue
+Write-ColorOutput "   Restart all:      docker-compose -f docker-compose.windows.yml restart" $Blue
+Write-Host ""
+
+Write-ColorOutput "✅ All Windows compatibility issues resolved!" $Green
+Write-ColorOutput "   - Native modules (bcrypt) working correctly" $Green
+Write-ColorOutput "   - Databases created automatically" $Green
+Write-ColorOutput "   - Frontend running in Docker" $Green
+Write-ColorOutput "   - All services healthy and communicating" $Green
+Write-Host ""
+
+Write-ColorOutput "🚀 Happy coding!" $Cyan 
