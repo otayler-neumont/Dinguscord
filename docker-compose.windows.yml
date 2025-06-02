@@ -2,7 +2,9 @@ version: '3.8'
 
 services:
   authentication-service:
-    build: ./AuthenticationService
+    build: 
+      context: ./AuthenticationService
+      dockerfile: Dockerfile.windows
     ports:
       - "3001:3000"
     environment:
@@ -29,7 +31,9 @@ services:
     restart: unless-stopped
 
   chat-room-service:
-    build: ./ChatRoomService
+    build:
+      context: ./ChatRoomService
+      dockerfile: Dockerfile
     ports:
       - "3002:3000"
     environment:
@@ -52,7 +56,9 @@ services:
     restart: unless-stopped
 
   message-handling-service:
-    build: ./MessageHandlingService
+    build:
+      context: ./MessageHandlingService
+      dockerfile: Dockerfile.windows
     ports:
       - "3003:3000"
     environment:
@@ -82,7 +88,9 @@ services:
     restart: unless-stopped
 
   user-presence-service:
-    build: ./UserPresenceService
+    build:
+      context: ./UserPresenceService
+      dockerfile: Dockerfile
     ports:
       - "3004:3000"
     environment:
@@ -102,7 +110,9 @@ services:
     restart: unless-stopped
 
   notification-service:
-    build: ./NotificationService
+    build:
+      context: ./NotificationService
+      dockerfile: Dockerfile
     ports:
       - "3005:3000"
     environment:
@@ -121,7 +131,9 @@ services:
     restart: unless-stopped
 
   api-gateway:
-    build: ./ApiGateway
+    build:
+      context: ./ApiGateway
+      dockerfile: Dockerfile
     ports:
       - "8080:8080"
     environment:

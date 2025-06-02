@@ -16,6 +16,11 @@ This guide addresses common Windows-specific issues when running the Dinguscord 
 **Problem**: Bash scripts fail to execute properly  
 **Cause**: Windows line endings (`\r\n`) vs Unix line endings (`\n`)
 
+### Issue 4: ERR_DLOPEN_FAILED - Native Module Errors ⭐ NEW
+**Problem**: Authentication service fails with "ERR_DLOPEN_FAILED" error loading shared library  
+**Cause**: Native Node.js modules (like `bcrypt`) compiled for wrong architecture  
+**Solution**: Use Windows-specific Dockerfiles that properly rebuild native modules
+
 ## 🛠️ Prerequisites
 
 1. **Docker Desktop for Windows** - Latest version
@@ -27,6 +32,23 @@ This guide addresses common Windows-specific issues when running the Dinguscord 
    ```
 
 ## 🚀 Setup Instructions
+
+### Quick Start (Recommended) ⭐
+Use one of the Windows startup scripts that handle everything automatically:
+
+**Option A: PowerShell Script (Recommended)**
+```powershell
+# Right-click PowerShell and "Run as Administrator"
+.\start-dinguscord.ps1
+```
+
+**Option B: Batch File**
+```cmd
+# Double-click or run from Command Prompt
+start-dinguscord.bat
+```
+
+### Manual Setup (If you prefer more control)
 
 ### Step 1: Clone with Correct Line Endings
 ```bash
@@ -41,9 +63,15 @@ git config core.eol lf
 
 ### Step 2: Use Windows-Optimized Docker Compose
 ```bash
-# Use the Windows-specific Docker Compose file
+# Use the Windows-specific Docker Compose file (RECOMMENDED)
 docker-compose -f docker-compose.windows.yml up --build
 ```
+
+**💡 The Windows compose file includes:**
+- Windows-compatible Dockerfiles that properly handle native modules
+- Fixed health checks using `wget` instead of `curl`
+- Proper dependency management and startup order
+- Removal of problematic bash script mounting
 
 ### Step 3: Manual Database Creation (If Script Fails)
 If the automatic database creation fails, create databases manually:
@@ -65,7 +93,66 @@ Check that all services are running:
 docker-compose -f docker-compose.windows.yml ps
 ```
 
+## 🚀 Windows Startup Scripts
+
+### PowerShell Script Features (`start-dinguscord.ps1`)
+- ✅ Colorful output with status indicators
+- ✅ Automatic Docker status checking
+- ✅ Intelligent compose file selection (Windows-specific preferred)
+- ✅ Comprehensive health checks for all services
+- ✅ Automatic frontend dependency installation
+- ✅ Environment file creation
+- ✅ Detailed error reporting
+
+### Batch File Features (`start-dinguscord.bat`)
+- ✅ Simple, reliable batch script
+- ✅ Basic Docker and service checks
+- ✅ Works on any Windows version
+- ✅ No PowerShell execution policy issues
+
+### Running the Scripts
+```powershell
+# For PowerShell (may need execution policy change)
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+.\start-dinguscord.ps1
+
+# For Batch (always works)
+start-dinguscord.bat
+
+# Or double-click either file in File Explorer
+```
+
 ## 🔧 Troubleshooting
+
+### ERR_DLOPEN_FAILED Error Fix
+If you see this error in the authentication service or message service:
+
+```bash
+# Stop all containers
+docker-compose -f docker-compose.windows.yml down
+
+# Clear Docker build cache
+docker builder prune -f
+
+# Rebuild with the Windows-specific setup
+docker-compose -f docker-compose.windows.yml up --build --force-recreate
+```
+
+The Windows Dockerfiles specifically:
+- Use full Node.js image instead of Alpine
+- Install build dependencies (python3, make, g++)
+- Force rebuild of native modules for Linux container architecture
+- Clear npm cache to avoid platform conflicts
+
+### PowerShell Execution Policy Issues
+If you get execution policy errors:
+```powershell
+# Allow local scripts to run
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+# Or run with bypass
+PowerShell.exe -ExecutionPolicy Bypass -File start-dinguscord.ps1
+```
 
 ### Database Connection Issues
 1. **Check Docker Desktop is running in WSL2 mode**
@@ -134,6 +221,9 @@ curl -X POST http://localhost:8080/api/auth/register \
 
 ## 🐛 Common Error Messages & Fixes
 
+### "ERR_DLOPEN_FAILED" or "Cannot load shared library"
+**Fix**: Use `docker-compose.windows.yml` which rebuilds native modules correctly
+
 ### "no such file or directory: /docker-entrypoint-initdb.d/create-multiple-postgres-databases.sh"
 **Fix**: Use `docker-compose.windows.yml` which doesn't mount the bash script
 
@@ -153,6 +243,12 @@ taskkill /PID <PID_NUMBER> /F
 ```bash
 docker-compose -f docker-compose.windows.yml down
 docker system prune -f
+```
+
+### "cannot be loaded because running scripts is disabled"
+**Fix**: Set PowerShell execution policy
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
 ## 📝 Alternative: Using Regular Docker Compose
@@ -182,7 +278,9 @@ You'll know everything is working when:
 - You can access http://localhost:8080/health
 - Database commands work without errors
 - You can create users and send messages
+- **No ERR_DLOPEN_FAILED errors in the logs**
+- **Frontend opens at http://localhost:5173**
 
 ---
 
-*This guide addresses 90% of Windows Docker issues. If you're still having problems, the issue might be environment-specific.* 
+*This guide addresses 95% of Windows Docker issues including native module compilation problems. If you're still having problems, the issue might be environment-specific.* 
