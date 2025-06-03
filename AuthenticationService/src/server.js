@@ -37,6 +37,12 @@ app.get('/auth/profile', authMiddleware.authenticateToken, authController.getPro
 app.put('/auth/profile', authMiddleware.authenticateToken, authController.updateProfile);
 app.post('/auth/password', authMiddleware.authenticateToken, authController.changePassword);
 
+// Search users (protected)
+app.get('/auth/users/search', authMiddleware.authenticateToken, authController.searchUsers);
+
+// Get user info by ID (internal service endpoint)
+app.get('/auth/users/:userId', authController.getUserById);
+
 // Password reset (public)
 app.post('/auth/password-reset', (req, res) => {
   // To be implemented

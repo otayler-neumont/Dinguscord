@@ -236,11 +236,88 @@ const verifyToken = async (req, res) => {
   }
 };
 
+// Search users
+const searchUsers = async (req, res) => {
+  try {
+    const { q } = req.query;
+    const currentUserId = req.user.id;
+    
+    // Validate search query
+    if (!q || q.trim().length < 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Search query is required'
+      });
+    }
+    
+    // Search for users (exclude current user)
+    const users = await UserModel.searchUsers(q.trim(), currentUserId);
+    
+    res.status(200).json({
+      success: true,
+      users: users || []
+    });
+  } catch (error) {
+    console.error('Error searching users:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+// Get user by ID (for microservices)
+const getUserById = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Validate user ID
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+    
+    // Get user by ID
+    const user = await UserModel.getUserById(userId);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    // Return sanitized user data (no password)
+    res.status(200).json({
+      success: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        display_name: user.display_name,
+        email: user.email,
+        created_at: user.created_at
+      }
+    });
+  } catch (error) {
+    console.error('Error getting user by ID:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   register,
   login,
   getProfile,
   updateProfile,
   changePassword,
-  verifyToken
+  verifyToken,
+  searchUsers,
+  getUserById
 }; 

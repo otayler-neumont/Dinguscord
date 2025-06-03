@@ -132,6 +132,54 @@ const createMessage = async (messageData) => {
   }
 };
 
+// Function to fetch user information from AuthenticationService
+const fetchUserInfo = async (userId) => {
+  try {
+    const axios = require('axios');
+    const response = await axios.get(`http://dinguscord-authentication-service-1:3001/auth/users/${userId}`, {
+      timeout: 5000
+    });
+    
+    if (response.data && response.data.success) {
+      return {
+        id: response.data.user.id,
+        username: response.data.user.username,
+        display_name: response.data.user.display_name
+      };
+    }
+  } catch (error) {
+    console.warn(`Failed to fetch user info for ${userId}:`, error.message);
+  }
+  
+  // Fallback to generating user name from UUID if fetch fails
+  const userNum = parseInt(userId.substring(0, 8), 16) % 1000;
+  return {
+    id: userId,
+    username: `User${userNum}`,
+    display_name: `User${userNum}`
+  };
+};
+
+// Function to enrich messages with sender usernames
+const enrichMessagesWithUsernames = async (messages) => {
+  const userCache = new Map();
+  
+  for (const message of messages) {
+    if (message.sender_id && !userCache.has(message.sender_id)) {
+      const userInfo = await fetchUserInfo(message.sender_id);
+      userCache.set(message.sender_id, userInfo);
+    }
+    
+    const userInfo = userCache.get(message.sender_id);
+    if (userInfo) {
+      message.sender_name = userInfo.username;
+      message.sender_display_name = userInfo.display_name;
+    }
+  }
+  
+  return messages;
+};
+
 // Get messages for a specific room
 const getRoomMessages = async (roomId, limit = 50, offset = 0) => {
   try {
@@ -148,11 +196,15 @@ const getRoomMessages = async (roomId, limit = 50, offset = 0) => {
       const values = [roomId, limit, offset];
       const result = await pool.query(query, values);
       
-      return result.rows.reverse();
+      const messages = result.rows.reverse();
+      
+      // Enrich messages with usernames
+      return await enrichMessagesWithUsernames(messages);
     } catch (error) {
       console.warn('Database query failed, using mock data:', error.message);
       // Return mock data for demonstration
-      return mockMessages.filter(msg => msg.room_id === roomId);
+      const messages = mockMessages.filter(msg => msg.room_id === roomId);
+      return await enrichMessagesWithUsernames(messages);
     }
   } catch (error) {
     console.error('Error getting room messages:', error);

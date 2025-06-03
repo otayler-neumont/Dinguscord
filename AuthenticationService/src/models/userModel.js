@@ -241,6 +241,32 @@ const changePassword = async (id, currentPassword, newPassword) => {
   }
 };
 
+// Search users by username or display name
+const searchUsers = async (searchTerm, excludeUserId) => {
+  try {
+    const query = `
+      SELECT id, username, email, display_name, avatar_url
+      FROM users
+      WHERE (username ILIKE $1 OR display_name ILIKE $1)
+        AND id != $2
+        AND is_active = true
+      ORDER BY 
+        CASE WHEN username ILIKE $1 THEN 1 ELSE 2 END,
+        username
+      LIMIT 20
+    `;
+    
+    const searchPattern = `%${searchTerm}%`;
+    const values = [searchPattern, excludeUserId];
+    const result = await pool.query(query, values);
+    
+    return result.rows;
+  } catch (error) {
+    console.error('Error searching users:', error);
+    throw error;
+  }
+};
+
 // Initialize the table when the module is imported
 initializeTable().catch(error => {
   console.error('Error initializing users table:', error);
@@ -253,5 +279,6 @@ module.exports = {
   getUserById,
   authenticateUser,
   updateUser,
-  changePassword
+  changePassword,
+  searchUsers
 }; 

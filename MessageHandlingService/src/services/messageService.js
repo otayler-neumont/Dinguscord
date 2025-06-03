@@ -2,6 +2,7 @@ const MessageModel = require('../models/messageModel');
 const RedisService = require('./redisService');
 const RabbitMQService = require('./rabbitmqService');
 const { v4: uuidv4 } = require('uuid');
+const fetch = require('node-fetch');
 
 class MessageService {
   constructor() {
@@ -12,6 +13,48 @@ class MessageService {
     );
   }
   
+  // Enrich messages with usernames
+  async enrichMessagesWithUsernames(messages) {
+    if (!messages || messages.length === 0) {
+      return messages;
+    }
+
+    try {
+      // Get unique sender IDs
+      const senderIds = [...new Set(messages.map(msg => msg.sender_id))];
+      
+      // Fetch usernames for all unique senders
+      const usernames = {};
+      for (const senderId of senderIds) {
+        try {
+          const response = await fetch(`http://dinguscord-authentication-service-1:3000/auth/users/${senderId}`);
+          if (response.ok) {
+            const user = await response.json();
+            usernames[senderId] = user.username;
+          } else {
+            console.warn(`Failed to fetch username for user ${senderId}`);
+            usernames[senderId] = `User${senderId}`;
+          }
+        } catch (error) {
+          console.error(`Error fetching username for user ${senderId}:`, error);
+          usernames[senderId] = `User${senderId}`;
+        }
+      }
+
+      // Enrich messages with usernames
+      return messages.map(message => ({
+        ...message,
+        username: usernames[message.sender_id] || `User${message.sender_id}`
+      }));
+    } catch (error) {
+      console.error('Error enriching messages with usernames:', error);
+      return messages.map(message => ({
+        ...message,
+        username: `User${message.sender_id}`
+      }));
+    }
+  }
+
   // Process incoming message broadcast from other services
   async handleIncomingBroadcast(message, routingKey) {
     console.log(`Received broadcast message with routing key: ${routingKey}`, message);
@@ -64,8 +107,12 @@ class MessageService {
       // Save message to database
       const savedMessage = await MessageModel.createMessage(messageData);
       
+      // Enrich with username
+      const enrichedMessages = await this.enrichMessagesWithUsernames([savedMessage]);
+      const enrichedMessage = enrichedMessages[0];
+      
       // Cache message in Redis
-      await RedisService.cacheMessage(savedMessage);
+      await RedisService.cacheMessage(enrichedMessage);
       
       // Determine the routing key based on message type
       let routingKey = 'message.sent';
@@ -77,7 +124,7 @@ class MessageService {
       
       // Publish message to RabbitMQ for other services
       await RabbitMQService.publishMessage(routingKey, {
-        message: savedMessage,
+        message: enrichedMessage,
         timestamp: new Date().toISOString()
       });
       
@@ -100,11 +147,11 @@ class MessageService {
       
       // Publish notification event for the notification service
       await RabbitMQService.publishMessage('notification.message.new', {
-        message: savedMessage,
+        message: enrichedMessage,
         timestamp: new Date().toISOString()
       });
       
-      return savedMessage;
+      return enrichedMessage;
     } catch (error) {
       console.error('Error creating message:', error);
       throw error;
@@ -119,19 +166,23 @@ class MessageService {
       
       if (cachedMessages && cachedMessages.length >= limit) {
         console.log(`Returning ${cachedMessages.length} cached messages for room ${roomId}`);
-        return cachedMessages;
+        // Enrich cached messages with usernames
+        return await this.enrichMessagesWithUsernames(cachedMessages);
       }
       
       // If cache miss or not enough messages in cache, get from database
       console.log(`Cache miss for room ${roomId}, fetching from database`);
       const messages = await MessageModel.getRoomMessages(roomId, limit, offset);
       
+      // Enrich messages with usernames
+      const enrichedMessages = await this.enrichMessagesWithUsernames(messages);
+      
       // Cache these messages for future requests
-      for (const message of messages) {
+      for (const message of enrichedMessages) {
         await RedisService.cacheMessage(message);
       }
       
-      return messages;
+      return enrichedMessages;
     } catch (error) {
       console.error('Error fetching room messages:', error);
       throw error;
@@ -144,12 +195,15 @@ class MessageService {
       // Get from database
       const messages = await MessageModel.getDirectMessages(userId1, userId2, limit, offset);
       
+      // Enrich messages with usernames
+      const enrichedMessages = await this.enrichMessagesWithUsernames(messages);
+      
       // Cache these messages for future requests
-      for (const message of messages) {
+      for (const message of enrichedMessages) {
         await RedisService.cacheMessage(message);
       }
       
-      return messages;
+      return enrichedMessages;
     } catch (error) {
       console.error('Error fetching direct messages:', error);
       throw error;
