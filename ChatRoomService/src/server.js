@@ -23,6 +23,122 @@ app.get('/health', (req, res) => {
   });
 });
 
+// ========== DM ENDPOINTS ==========
+
+// Create or get DM room between two users
+app.post('/dm/:userId1/:userId2', async (req, res) => {
+  try {
+    const { userId1, userId2 } = req.params;
+    
+    if (!userId1 || !userId2) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Both user IDs are required' 
+      });
+    }
+    
+    if (userId1 === userId2) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Cannot create DM with yourself' 
+      });
+    }
+    
+    // Create consistent DM room ID (smaller user ID first for uniqueness)
+    const sortedIds = [userId1, userId2].sort();
+    const dmRoomId = `dm-${sortedIds[0]}-${sortedIds[1]}`;
+    
+    // Check if DM room already exists
+    let existingRoom = await roomModel.getRoomById(dmRoomId);
+    
+    if (existingRoom) {
+      // DM room exists, return it
+      return res.status(200).json({
+        success: true,
+        message: 'DM room retrieved',
+        room: existingRoom,
+        isDM: true
+      });
+    }
+    
+    // Create new DM room
+    const newRoom = await roomModel.createRoom({
+      id: dmRoomId,
+      name: dmRoomId, // Use the ID as the name for DMs
+      userId: userId1 // Creator is the first user
+    });
+    
+    // Add both users to the DM room
+    await roomModel.addUserToRoom(dmRoomId, userId2);
+    
+    // Get the complete room with both users
+    const completeRoom = await roomModel.getRoomById(dmRoomId);
+    
+    res.status(201).json({
+      success: true,
+      message: 'DM room created successfully',
+      room: completeRoom,
+      isDM: true
+    });
+  } catch (error) {
+    console.error('Error creating/getting DM room:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+});
+
+// Get all DM rooms for a user
+app.get('/users/:userId/dms', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const allUserRooms = await roomModel.getUserRooms(userId);
+    
+    // Filter to only DM rooms (rooms with 'dm-' prefix and exactly 2 users)
+    const dmRooms = allUserRooms.filter(room => 
+      room.id.startsWith('dm-') && room.users.length === 2
+    );
+    
+    res.json({
+      success: true,
+      dms: dmRooms
+    });
+  } catch (error) {
+    console.error('Error getting user DMs:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+});
+
+// Get all regular (non-DM) rooms for a user  
+app.get('/users/:userId/rooms', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const allUserRooms = await roomModel.getUserRooms(userId);
+    
+    // Filter to only regular rooms (not DM rooms)
+    const regularRooms = allUserRooms.filter(room => 
+      !room.id.startsWith('dm-')
+    );
+    
+    res.json(regularRooms);
+  } catch (error) {
+    console.error('Error getting user rooms:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+});
+
+// ========== REGULAR ROOM ENDPOINTS ==========
+
 // Create a new room
 app.post('/rooms', async (req, res) => {
   try {
@@ -86,22 +202,6 @@ app.post('/rooms', async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating room:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-});
-
-// Get all rooms for a user
-app.get('/users/:userId/rooms', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const userRooms = await roomModel.getUserRooms(userId);
-    res.json(userRooms);
-  } catch (error) {
-    console.error('Error getting user rooms:', error);
     res.status(500).json({
       success: false,
       message: 'Internal server error',

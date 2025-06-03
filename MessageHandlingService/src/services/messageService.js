@@ -24,33 +24,63 @@ class MessageService {
       const senderIds = [...new Set(messages.map(msg => msg.sender_id))];
       
       // Fetch usernames for all unique senders
-      const usernames = {};
+      const userInfo = {};
       for (const senderId of senderIds) {
         try {
-          const response = await fetch(`http://dinguscord-authentication-service-1:3000/auth/users/${senderId}`);
+          // Use correct service URL and endpoint format
+          const response = await fetch(`http://authentication-service:3000/internal/users/${senderId}`);
           if (response.ok) {
-            const user = await response.json();
-            usernames[senderId] = user.username;
+            const result = await response.json();
+            if (result.success && result.user) {
+              userInfo[senderId] = {
+                username: result.user.username,
+                display_name: result.user.display_name,
+                sender_name: result.user.display_name || result.user.username,
+                sender_display_name: result.user.display_name
+              };
+            } else {
+              console.warn(`Failed to get user data for user ${senderId}:`, result.message);
+              userInfo[senderId] = {
+                username: `User${senderId.substring(0, 8)}`,
+                display_name: `User${senderId.substring(0, 8)}`,
+                sender_name: `User${senderId.substring(0, 8)}`,
+                sender_display_name: `User${senderId.substring(0, 8)}`
+              };
+            }
           } else {
-            console.warn(`Failed to fetch username for user ${senderId}`);
-            usernames[senderId] = `User${senderId}`;
+            console.warn(`Failed to fetch username for user ${senderId}, status: ${response.status}`);
+            userInfo[senderId] = {
+              username: `User${senderId.substring(0, 8)}`,
+              display_name: `User${senderId.substring(0, 8)}`,
+              sender_name: `User${senderId.substring(0, 8)}`,
+              sender_display_name: `User${senderId.substring(0, 8)}`
+            };
           }
         } catch (error) {
           console.error(`Error fetching username for user ${senderId}:`, error);
-          usernames[senderId] = `User${senderId}`;
+          userInfo[senderId] = {
+            username: `User${senderId.substring(0, 8)}`,
+            display_name: `User${senderId.substring(0, 8)}`,
+            sender_name: `User${senderId.substring(0, 8)}`,
+            sender_display_name: `User${senderId.substring(0, 8)}`
+          };
         }
       }
 
-      // Enrich messages with usernames
+      // Enrich messages with usernames and display names
       return messages.map(message => ({
         ...message,
-        username: usernames[message.sender_id] || `User${message.sender_id}`
+        username: userInfo[message.sender_id]?.username || `User${message.sender_id}`,
+        sender_name: userInfo[message.sender_id]?.sender_name || `User${message.sender_id}`,
+        sender_display_name: userInfo[message.sender_id]?.sender_display_name || `User${message.sender_id}`
       }));
     } catch (error) {
       console.error('Error enriching messages with usernames:', error);
       return messages.map(message => ({
         ...message,
-        username: `User${message.sender_id}`
+        username: `User${message.sender_id}`,
+        sender_name: `User${message.sender_id}`,
+        sender_display_name: `User${message.sender_id}`
       }));
     }
   }

@@ -1,15 +1,11 @@
 <script lang="ts">
-    import { logout } from '$lib/stores/user';
+    import { logout, searchUsers, addFriend, removeFriend, getFriends, getFriendsOnlineStatus, createOrGetDM, startHeartbeat, stopHeartbeat } from '$lib/stores/user';
     import { goto } from '$app/navigation';
-    import { createEventDispatcher } from 'svelte';
+    import { createEventDispatcher, onMount, onDestroy } from 'svelte';
+    import { user, token } from '$lib/stores/user';
     
     export let username = '';
-    export let friends: string[] = [];
-    export let search = '';
-    export let filteredUsers: string[] = [];
-    export let addingFriend = false;
     export let chatRooms: {id: string, name: string}[] = [];
-    export let addFriend: (friendName: string) => Promise<void>;
     export let loading = false;
     export let error = '';
 
@@ -18,10 +14,87 @@
     let newRoomName = '';
     let creatingRoom = false;
 
+    // Friends system state
+    let searchTerm = '';
+    let searchResults = [];
+    let searchLoading = false;
+    let friends = [];
+    let onlineStatus = {};
+    let friendsLoading = false;
+
+    // Presence tracking
+    let currentUser = null;
+    let currentToken = null;
+    let presenceUpdateInterval = null;
+
     const dispatch = createEventDispatcher();
 
+    // Subscribe to user and token stores
+    const unsubscribeUser = user.subscribe(value => {
+        currentUser = value;
+    });
+    
+    const unsubscribeToken = token.subscribe(value => {
+        currentToken = value;
+    });
+
+    // Load friends and start heartbeat system on mount
+    onMount(async () => {
+        await loadFriends();
+        
+        // Start heartbeat system for presence tracking
+        if (currentUser && currentToken) {
+            startHeartbeat();
+        }
+        
+        // Start checking friends' online status
+        startPresenceUpdates();
+    });
+
+    // Clean up on destroy
+    onDestroy(() => {
+        unsubscribeUser();
+        unsubscribeToken();
+        
+        // Stop heartbeat system
+        stopHeartbeat();
+        
+        if (presenceUpdateInterval) {
+            clearInterval(presenceUpdateInterval);
+        }
+    });
+
+    function startPresenceUpdates() {
+        // Update friends online status every 10 seconds for faster debugging
+        presenceUpdateInterval = setInterval(async () => {
+            if (friends.length > 0) {
+                console.log('Auto-refreshing friends online status...');
+                await updateFriendsOnlineStatus();
+            }
+        }, 10000); // 10 seconds for debugging
+    }
+
+    async function updateFriendsOnlineStatus() {
+        if (friends.length === 0) return;
+        
+        try {
+            const userIds = friends.map(friend => friend.id);
+            console.log('Checking online status for user IDs:', userIds);
+            const statusResult = await getFriendsOnlineStatus(userIds);
+            console.log('Online status result:', statusResult);
+            if (statusResult.success) {
+                onlineStatus = statusResult.onlineStatus || {};
+                console.log('Updated online status:', onlineStatus);
+            }
+        } catch (error) {
+            console.error('Failed to update friends online status:', error);
+        }
+    }
+
     async function handleLogout() {
-        logout();
+        // Stop heartbeat before logging out
+        stopHeartbeat();
+        await logout();
         await goto('/');
     }
 
@@ -61,11 +134,130 @@
             createRoom();
         }
     }
+
+    async function handleSearch() {
+        if (!searchTerm.trim()) {
+            searchResults = [];
+            return;
+        }
+
+        searchLoading = true;
+        try {
+            const result = await searchUsers(searchTerm);
+            if (result.success) {
+                searchResults = result.users || [];
+            } else {
+                console.error('Search failed:', result.message);
+                searchResults = [];
+            }
+        } catch (error) {
+            console.error('Search error:', error);
+            searchResults = [];
+        } finally {
+            searchLoading = false;
+        }
+    }
+
+    async function handleAddFriend(friendId) {
+        try {
+            const result = await addFriend(friendId);
+            if (result.success) {
+                // Remove from search results
+                searchResults = searchResults.filter(user => user.id !== friendId);
+                // Reload friends list
+                await loadFriends();
+            } else {
+                console.error('Add friend failed:', result.message);
+                alert('Failed to add friend: ' + result.message);
+            }
+        } catch (error) {
+            console.error('Add friend error:', error);
+            alert('Failed to add friend');
+        }
+    }
+
+    async function handleRemoveFriend(friendId) {
+        if (!confirm('Are you sure you want to remove this friend?')) {
+            return;
+        }
+
+        try {
+            const result = await removeFriend(friendId);
+            if (result.success) {
+                // Reload friends list
+                await loadFriends();
+            } else {
+                console.error('Remove friend failed:', result.message);
+                alert('Failed to remove friend: ' + result.message);
+            }
+        } catch (error) {
+            console.error('Remove friend error:', error);
+            alert('Failed to remove friend');
+        }
+    }
+
+    async function loadFriends() {
+        friendsLoading = true;
+        try {
+            const result = await getFriends();
+            if (result.success) {
+                friends = result.friends || [];
+                
+                // Get online status for friends using the dedicated function
+                await updateFriendsOnlineStatus();
+            } else {
+                console.error('Load friends failed:', result.message);
+                friends = [];
+            }
+        } catch (error) {
+            console.error('Load friends error:', error);
+            friends = [];
+        } finally {
+            friendsLoading = false;
+        }
+    }
+
+    // Auto-search when typing with debounce
+    let searchTimer;
+    $: {
+        if (searchTimer) {
+            clearTimeout(searchTimer);
+        }
+        
+        if (searchTerm) {
+            searchTimer = setTimeout(handleSearch, 300);
+        } else {
+            searchResults = [];
+        }
+    }
+
+    async function handleStartDM(friendId) {
+        try {
+            // Create or get the DM room
+            const result = await createOrGetDM(friendId);
+            if (result.success && result.room) {
+                // Navigate to the regular chat interface with the DM room ID
+                goto(`/chat/room/${encodeURIComponent(result.room.id)}`);
+            } else {
+                console.error('Failed to create DM:', result.message);
+                alert('Failed to start conversation. Please try again.');
+            }
+        } catch (error) {
+            console.error('Error starting DM:', error);
+            alert('Failed to start conversation. Please try again.');
+        }
+    }
 </script>
 
 <div class="dashboard">
     <div class="dashboard-container">
-        <h1>Welcome back, {username}! 👋</h1>
+        <!-- Header with logout button -->
+        <div class="dashboard-header">
+            <h1>Welcome back, {username}! 👋</h1>
+            <button class="logout-btn" on:click={handleLogout} title="Logout">
+                <span>Logout</span>
+            </button>
+        </div>
 
         {#if loading}
             <div class="loading-message">
@@ -79,80 +271,110 @@
             </div>
         {/if}
 
-        <div class="dashboard-actions">
-            {#if chatRooms.length > 0}
-                <button on:click={() => goto(`/chat/room/${encodeURIComponent(chatRooms[0].name)}`)}>
-                    Join {chatRooms[0].name}
-                </button>
-            {:else}
-                <button on:click={() => goto('/chat/room/General')}>
-                    Join General Chat
-                </button>
-            {/if}
-            <button on:click={() => goto('/chat/room/Tech%20Talk')}>
-                Tech Discussion
-            </button>
-            <button on:click={handleLogout}>
-                Logout
-            </button>
-        </div>
-
         <div class="dashboard-sections">
             <!-- Friends Section -->
             <div class="section friends-list">
-                <h2>Your Friends ({friends.length})</h2>
-                {#if friends.length > 0}
-                    <ul>
-                        {#each friends as friend}
-                            <li>
-                                <a href="/chat/{friend}">
-                                    {friend}
-                                </a>
-                            </li>
-                        {/each}
-                    </ul>
-                {:else}
-                    <p style="text-align: center; color: #7f8c8d; font-style: italic; padding: 20px;">
-                        No friends yet. Add some from the search section!
-                    </p>
-                {/if}
+                <div class="section-header">
+                    <h2>Your Friends ({friends.length})</h2>
+                </div>
+                <div class="section-content">
+                    {#if friendsLoading}
+                        <div class="loading-text">Loading friends...</div>
+                    {:else if friends.length === 0}
+                        <div class="empty-state">
+                            <p>No friends yet. Add some from the search section!</p>
+                        </div>
+                    {:else}
+                        <div class="friends-list">
+                            {#each friends as friend (friend.id)}
+                                <div class="friend-item">
+                                    <div class="friend-info">
+                                        <div class="friend-avatar">
+                                            {#if friend.avatar_url}
+                                                <img src={friend.avatar_url} alt={friend.username} />
+                                            {:else}
+                                                <div class="avatar-placeholder">
+                                                    {friend.username.charAt(0).toUpperCase()}
+                                                </div>
+                                            {/if}
+                                            <div class="online-indicator {onlineStatus[friend.id] ? 'online' : 'offline'}"></div>
+                                        </div>
+                                        <div class="friend-details">
+                                            <div class="friend-name">{friend.display_name || friend.username}</div>
+                                            <div class="friend-username">@{friend.username}</div>
+                                            <div class="friend-status" style="color: {onlineStatus[friend.id] ? '#10b981' : '#6b7280'}">
+                                                {onlineStatus[friend.id] ? 'Online' : 'Offline'}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="friend-actions">
+                                        <button class="action-btn message-btn" on:click={() => handleStartDM(friend.id)} title="Send Message">
+                                            💬
+                                        </button>
+                                        <button class="action-btn remove-btn" on:click={() => handleRemoveFriend(friend.id)} title="Remove Friend">
+                                            ❌
+                                        </button>
+                                    </div>
+                                </div>
+                            {/each}
+                        </div>
+                    {/if}
+                </div>
             </div>
 
             <!-- Search Friends Section -->
             <div class="section search-section">
-                <h2>Find New Friends</h2>
-                <input 
-                    type="text" 
-                    placeholder="Search users..." 
-                    bind:value={search}
-                    class="search-input"
-                />
-                {#if filteredUsers.length > 0}
-                    <ul class="search-results">
-                        {#each filteredUsers as user}
-                            <li>
-                                <div class="user-item">
-                                    <span class="username">{user}</span>
-                                    <button 
-                                        on:click={() => addFriend(user)}
-                                        disabled={addingFriend}
-                                        class="add-friend-btn"
-                                    >
-                                        {addingFriend ? 'Adding...' : 'Add Friend'}
+                <div class="section-header">
+                    <h2>Find New Friends</h2>
+                </div>
+                <div class="section-content">
+                    <div class="search-container">
+                        <input 
+                            type="text" 
+                            placeholder="Search users..." 
+                            bind:value={searchTerm}
+                            class="search-input"
+                        />
+                        {#if searchLoading}
+                            <div class="search-loading">Searching...</div>
+                        {/if}
+                    </div>
+                    
+                    {#if searchResults.length > 0}
+                        <div class="search-results">
+                            {#each searchResults as user (user.id)}
+                                <div class="search-result-item">
+                                    <div class="user-info">
+                                        <div class="user-avatar">
+                                            {#if user.avatar_url}
+                                                <img src={user.avatar_url} alt={user.username} />
+                                            {:else}
+                                                <div class="avatar-placeholder">
+                                                    {user.username.charAt(0).toUpperCase()}
+                                                </div>
+                                            {/if}
+                                        </div>
+                                        <div class="user-details">
+                                            <div class="user-name">{user.display_name || user.username}</div>
+                                            <div class="user-username">@{user.username}</div>
+                                        </div>
+                                    </div>
+                                    <button class="add-friend-btn" on:click={() => handleAddFriend(user.id)}>
+                                        Add Friend
                                     </button>
                                 </div>
-                            </li>
-                        {/each}
-                    </ul>
-                {:else if search}
-                    <p style="text-align: center; color: #7f8c8d; font-style: italic; padding: 20px;">
-                        No users found matching "{search}"
-                    </p>
-                {:else}
-                    <p style="text-align: center; color: #7f8c8d; font-style: italic; padding: 20px;">
-                        User discovery coming soon...
-                    </p>
-                {/if}
+                            {/each}
+                        </div>
+                    {:else if searchTerm && !searchLoading}
+                        <div class="no-results">
+                            <p>No users found matching "{searchTerm}"</p>
+                        </div>
+                    {:else if !searchTerm}
+                        <div class="search-placeholder">
+                            <p>Start typing to search for users...</p>
+                        </div>
+                    {/if}
+                </div>
             </div>
 
             <!-- Chat Rooms Section -->
@@ -246,6 +468,45 @@
 {/if}
 
 <style>
+.dashboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 30px;
+    padding-bottom: 20px;
+    border-bottom: 2px solid #ecf0f1;
+}
+
+.dashboard-header h1 {
+    margin: 0;
+    color: #2c3e50;
+    font-size: 32px;
+    font-weight: 800;
+}
+
+.logout-btn {
+    background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(231, 76, 60, 0.3);
+}
+
+.logout-btn:hover {
+    background: linear-gradient(135deg, #c0392b 0%, #a93226 100%);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(231, 76, 60, 0.4);
+}
+
+.logout-btn:active {
+    transform: translateY(0);
+}
+
 .loading-message, .error-message {
     text-align: center;
     padding: 20px;
@@ -430,5 +691,294 @@
 .create-btn:disabled {
     opacity: 0.6;
     cursor: not-allowed;
+}
+
+/* Friends List Styles */
+.friends-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.friend-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px;
+    background: #f8f9fa;
+    border-radius: 12px;
+    border: 1px solid #e9ecef;
+    transition: all 0.2s ease;
+}
+
+.friend-item:hover {
+    background: #e9ecef;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.friend-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.friend-avatar, .user-avatar {
+    position: relative;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    overflow: hidden;
+}
+
+.friend-avatar img, .user-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.avatar-placeholder {
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: bold;
+    font-size: 18px;
+}
+
+.online-indicator {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid white;
+    transition: all 0.2s ease;
+}
+
+.online-indicator.online {
+    background: #10b981;
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+}
+
+.online-indicator.offline {
+    background: #6b7280;
+}
+
+.friend-details {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.friend-name, .user-name {
+    font-weight: 600;
+    color: #2c3e50;
+    font-size: 16px;
+}
+
+.friend-username, .user-username {
+    color: #7f8c8d;
+    font-size: 14px;
+}
+
+.friend-status {
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.friend-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.action-btn {
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.message-btn {
+    background: #3498db;
+    color: white;
+}
+
+.message-btn:hover {
+    background: #2980b9;
+    transform: scale(1.1);
+}
+
+.remove-btn {
+    background: #e74c3c;
+    color: white;
+}
+
+.remove-btn:hover {
+    background: #c0392b;
+    transform: scale(1.1);
+}
+
+/* Search Styles */
+.search-container {
+    margin-bottom: 20px;
+}
+
+.search-input {
+    width: 100%;
+    padding: 12px 16px;
+    border: 2px solid #bdc3c7;
+    border-radius: 8px;
+    font-size: 16px;
+    transition: all 0.3s ease;
+    background: white;
+}
+
+.search-input:focus {
+    outline: none;
+    border-color: #3498db;
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+}
+
+.search-loading {
+    text-align: center;
+    color: #7f8c8d;
+    font-style: italic;
+    margin-top: 10px;
+}
+
+.search-results {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.search-result-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border: 1px solid #e9ecef;
+    transition: all 0.2s ease;
+}
+
+.search-result-item:hover {
+    background: #e9ecef;
+    transform: translateY(-1px);
+}
+
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.user-details {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.add-friend-btn {
+    background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.add-friend-btn:hover {
+    background: linear-gradient(135deg, #229954 0%, #27ae60 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(39, 174, 96, 0.3);
+}
+
+.no-results, .search-placeholder, .empty-state {
+    text-align: center;
+    color: #7f8c8d;
+    font-style: italic;
+    padding: 40px 20px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border: 1px dashed #bdc3c7;
+}
+
+.loading-text {
+    text-align: center;
+    color: #7f8c8d;
+    font-style: italic;
+    padding: 20px;
+}
+
+/* Chat Rooms Styles */
+.chat-rooms {
+    margin-bottom: 30px;
+}
+
+.chat-rooms ul {
+    list-style: none;
+    padding: 0;
+}
+
+.chat-rooms li {
+    margin-bottom: 10px;
+}
+
+.chat-rooms a {
+    text-decoration: none;
+    color: inherit;
+    transition: all 0.2s ease;
+}
+
+.chat-rooms a:hover {
+    color: #3498db;
+    transform: translateY(-2px);
+}
+
+/* Quick Actions Styles */
+.section {
+    margin-bottom: 30px;
+}
+
+.section h2 {
+    margin-bottom: 20px;
+}
+
+.section ul {
+    list-style: none;
+    padding: 0;
+}
+
+.section li {
+    margin-bottom: 10px;
+}
+
+.section a {
+    text-decoration: none;
+    color: inherit;
+    transition: all 0.2s ease;
+}
+
+.section a:hover {
+    color: #3498db;
+    transform: translateY(-2px);
 }
 </style>

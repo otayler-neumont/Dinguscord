@@ -36,32 +36,58 @@ const connectWithRetry = async (maxRetries = 5, initialDelay = 2000) => {
   throw lastError;
 };
 
-// Initialize the users table if it doesn't exist
+// Initialize the users table
 const initializeTable = async () => {
   try {
-    // First ensure we can connect to the database
     await connectWithRetry();
     
-    // Then create the table if it doesn't exist
-    await pool.query(`
+    // Create users table
+    const createUsersTable = `
       CREATE TABLE IF NOT EXISTS users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         username VARCHAR(50) UNIQUE NOT NULL,
         email VARCHAR(255) UNIQUE NOT NULL,
         password VARCHAR(255) NOT NULL,
         display_name VARCHAR(100),
-        avatar_url VARCHAR(255),
-        is_active BOOLEAN DEFAULT TRUE,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-      );
-      
-      CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-      CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-    `);
-    console.log('Users table initialized');
+        avatar_url TEXT,
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    
+    await pool.query(createUsersTable);
+    console.log('Users table initialized successfully');
+    
+    // Create friendships table
+    const createFriendsTable = `
+      CREATE TABLE IF NOT EXISTS friendships (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        friend_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        status VARCHAR(20) DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, friend_id),
+        CHECK (user_id != friend_id)
+      )
+    `;
+    
+    await pool.query(createFriendsTable);
+    console.log('Friendships table initialized successfully');
+    
+    // Create index for faster friendship queries
+    const createFriendshipIndexes = `
+      CREATE INDEX IF NOT EXISTS idx_friendships_user_id ON friendships(user_id);
+      CREATE INDEX IF NOT EXISTS idx_friendships_friend_id ON friendships(friend_id);
+      CREATE INDEX IF NOT EXISTS idx_friendships_status ON friendships(status);
+    `;
+    
+    await pool.query(createFriendshipIndexes);
+    console.log('Friendship indexes created successfully');
+    
   } catch (error) {
-    console.error('Error initializing users table:', error);
+    console.error('Error initializing database tables:', error);
     throw error;
   }
 };
@@ -267,6 +293,106 @@ const searchUsers = async (searchTerm, excludeUserId) => {
   }
 };
 
+// Add friend request
+const addFriend = async (userId, friendId) => {
+  try {
+    // Check if friendship already exists
+    const existingQuery = `
+      SELECT * FROM friendships 
+      WHERE (user_id = $1 AND friend_id = $2) 
+         OR (user_id = $2 AND friend_id = $1)
+    `;
+    const existingResult = await pool.query(existingQuery, [userId, friendId]);
+    
+    if (existingResult.rows.length > 0) {
+      return { success: false, message: 'Friendship already exists' };
+    }
+    
+    // Create friendship record
+    const query = `
+      INSERT INTO friendships (user_id, friend_id, status)
+      VALUES ($1, $2, 'accepted')
+      RETURNING *
+    `;
+    
+    const result = await pool.query(query, [userId, friendId]);
+    
+    // Create reciprocal friendship record for easier querying
+    const reciprocalQuery = `
+      INSERT INTO friendships (user_id, friend_id, status)
+      VALUES ($1, $2, 'accepted')
+      RETURNING *
+    `;
+    
+    await pool.query(reciprocalQuery, [friendId, userId]);
+    
+    return { success: true, friendship: result.rows[0] };
+  } catch (error) {
+    console.error('Error adding friend:', error);
+    throw error;
+  }
+};
+
+// Remove friend
+const removeFriend = async (userId, friendId) => {
+  try {
+    const query = `
+      DELETE FROM friendships 
+      WHERE (user_id = $1 AND friend_id = $2) 
+         OR (user_id = $2 AND friend_id = $1)
+    `;
+    
+    const result = await pool.query(query, [userId, friendId]);
+    
+    return { success: true, deletedCount: result.rowCount };
+  } catch (error) {
+    console.error('Error removing friend:', error);
+    throw error;
+  }
+};
+
+// Get user's friends list with user details
+const getFriends = async (userId) => {
+  try {
+    const query = `
+      SELECT 
+        u.id,
+        u.username,
+        u.display_name,
+        u.avatar_url,
+        f.created_at as friend_since
+      FROM friendships f
+      JOIN users u ON f.friend_id = u.id
+      WHERE f.user_id = $1 
+        AND f.status = 'accepted'
+        AND u.is_active = true
+      ORDER BY u.username
+    `;
+    
+    const result = await pool.query(query, [userId]);
+    return result.rows;
+  } catch (error) {
+    console.error('Error getting friends:', error);
+    throw error;
+  }
+};
+
+// Check if two users are friends
+const areFriends = async (userId1, userId2) => {
+  try {
+    const query = `
+      SELECT 1 FROM friendships 
+      WHERE user_id = $1 AND friend_id = $2 AND status = 'accepted'
+    `;
+    
+    const result = await pool.query(query, [userId1, userId2]);
+    return result.rows.length > 0;
+  } catch (error) {
+    console.error('Error checking friendship:', error);
+    throw error;
+  }
+};
+
 // Initialize the table when the module is imported
 initializeTable().catch(error => {
   console.error('Error initializing users table:', error);
@@ -280,5 +406,9 @@ module.exports = {
   authenticateUser,
   updateUser,
   changePassword,
-  searchUsers
+  searchUsers,
+  addFriend,
+  removeFriend,
+  getFriends,
+  areFriends
 }; 

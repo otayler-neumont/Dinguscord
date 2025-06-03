@@ -311,6 +311,120 @@ const getUserById = async (req, res) => {
   }
 };
 
+// Add friend
+const addFriend = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { friendId } = req.body;
+    
+    // Validate friend ID
+    if (!friendId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Friend ID is required'
+      });
+    }
+    
+    // Check if trying to add themselves
+    if (userId === friendId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot add yourself as a friend'
+      });
+    }
+    
+    // Check if friend user exists
+    const friendUser = await UserModel.getUserById(friendId);
+    if (!friendUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    // Add friend
+    const result = await UserModel.addFriend(userId, friendId);
+    
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        message: result.message
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: 'Friend added successfully',
+      friend: {
+        id: friendUser.id,
+        username: friendUser.username,
+        display_name: friendUser.display_name,
+        avatar_url: friendUser.avatar_url
+      }
+    });
+  } catch (error) {
+    console.error('Error adding friend:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+// Remove friend
+const removeFriend = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { friendId } = req.params;
+    
+    // Validate friend ID
+    if (!friendId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Friend ID is required'
+      });
+    }
+    
+    // Remove friend
+    const result = await UserModel.removeFriend(userId, friendId);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Friend removed successfully'
+    });
+  } catch (error) {
+    console.error('Error removing friend:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+// Get friends list
+const getFriends = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Get user's friends
+    const friends = await UserModel.getFriends(userId);
+    
+    res.status(200).json({
+      success: true,
+      friends: friends || []
+    });
+  } catch (error) {
+    console.error('Error getting friends:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -319,5 +433,8 @@ module.exports = {
   changePassword,
   verifyToken,
   searchUsers,
-  getUserById
+  getUserById,
+  addFriend,
+  removeFriend,
+  getFriends
 }; 

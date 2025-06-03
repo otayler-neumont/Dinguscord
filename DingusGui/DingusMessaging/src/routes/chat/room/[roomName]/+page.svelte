@@ -2,7 +2,7 @@
     import './roomStyles.css';
     import { onMount, onDestroy } from 'svelte';
     import io from 'socket.io-client';
-    import { user, isAuthenticated, token } from '$lib/stores/user';
+    import { user, isAuthenticated, token, searchUsers } from '$lib/stores/user';
     import { goto } from '$app/navigation';
 
     export let data: {
@@ -18,6 +18,11 @@
     let username = $user?.username || 'Guest';
     let useMockData = false;
     let chatLogElement: HTMLElement;
+    
+    // DM detection and friend info
+    let isDMRoom = roomName.startsWith('dm-');
+    let friendInfo: any = null;
+    let displayRoomName = roomName;
     
     // User invitation state
     let showAddMembersModal = false;
@@ -70,12 +75,40 @@
         return message.sender_id === ($user?.id || $user?.username || username);
     }
 
+    async function loadFriendInfoForDM() {
+        if (!isDMRoom) return;
+        
+        try {
+            // Extract user IDs from DM room name (format: dm-userId1-userId2)
+            const parts = roomName.split('-');
+            if (parts.length >= 3) {
+                const userId1 = parts[1];
+                const userId2 = parts[2];
+                
+                // Find the other user (not current user)
+                const otherUserId = userId1 === $user?.id ? userId2 : userId1;
+                
+                // Search for the friend to get their info
+                const result = await searchUsers(otherUserId);
+                if (result.success && result.users && result.users.length > 0) {
+                    friendInfo = result.users[0];
+                    displayRoomName = `${friendInfo.display_name || friendInfo.username}`;
+                }
+            }
+        } catch (error) {
+            console.error('Error loading friend info for DM:', error);
+        }
+    }
+
     onMount(async () => {
         // Check if user is authenticated
         if (!$isAuthenticated) {
             goto('/');
             return;
         }
+
+        // Load friend info for DM rooms
+        await loadFriendInfoForDM();
 
         // Clear any cached messages and force fresh start
         messages = [];
@@ -187,8 +220,13 @@
             });
             
             if (response.ok) {
-                const data = await response.json();
-                messages = data || [];
+                const result = await response.json();
+                // Handle the API response structure properly
+                if (result.success && result.data) {
+                    messages = result.data;
+                } else {
+                    messages = result || [];
+                }
                 setTimeout(scrollToBottom, 100);
             } else {
                 console.warn('Failed to load messages, using empty room');
@@ -263,8 +301,11 @@
             });
 
             if (response.ok) {
-                const sentMessage = await response.json();
+                const result = await response.json();
                 console.log('Message sent successfully via API');
+                
+                // Handle the API response structure properly
+                const sentMessage = result.success && result.data ? result.data : result;
                 
                 // Add to local messages if not already added by socket
                 if (!messages.find(m => m.id === sentMessage.id)) {
@@ -365,7 +406,7 @@
         }
     }
 
-    async function searchUsers() {
+    async function searchUsersForRoom() {
         if (!userSearch.trim()) {
             searchResults = [];
             return;
@@ -479,7 +520,7 @@
 
     // Reactive search
     $: if (userSearch) {
-        searchUsers();
+        searchUsersForRoom();
     } else {
         searchResults = [];
     }
@@ -490,7 +531,15 @@
         <!-- Room Header -->
         <div class="room-header">
             <div>
-                <h1>#{roomName}</h1>
+                <h1>
+                    {#if isDMRoom && friendInfo}
+                        💬 {friendInfo.display_name || friendInfo.username}
+                    {:else if isDMRoom}
+                        💬 Direct Message
+                    {:else}
+                        #{displayRoomName}
+                    {/if}
+                </h1>
                 <div class="room-members">
                     {#if isConnecting}
                         Connecting...
@@ -507,9 +556,11 @@
                 <button class="room-action-btn" on:click={() => goto('/dashboard')}>
                     ← Back to Dashboard
                 </button>
-                <button class="room-action-btn" on:click={openAddMembersModal} title="Add members to room">
-                    👥 Add Members
-                </button>
+                {#if !isDMRoom}
+                    <button class="room-action-btn" on:click={openAddMembersModal} title="Add members to room">
+                        👥 Add Members
+                    </button>
+                {/if}
                 {#if connectionError}
                     <button class="room-action-btn" on:click={retryConnection}>
                         🔄 Retry
@@ -569,7 +620,7 @@
     <div class="modal-overlay" on:click={closeAddMembersModal}>
         <div class="modal-content" on:click|stopPropagation>
             <div class="modal-header">
-                <h3>Add Members to #{roomName}</h3>
+                <h3>Add Members to #{displayRoomName}</h3>
                 <button class="close-button" on:click={closeAddMembersModal}>&times;</button>
             </div>
             <div class="modal-body">

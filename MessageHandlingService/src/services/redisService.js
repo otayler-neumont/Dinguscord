@@ -243,6 +243,118 @@ const RedisService = {
       console.error('Redis get unread count error:', error);
       return 0;
     }
+  },
+  
+  // ===== NEW HEARTBEAT-BASED PRESENCE SYSTEM =====
+  
+  // Update user's heartbeat timestamp
+  async updateUserHeartbeat(userId) {
+    try {
+      const timestamp = Date.now();
+      
+      // Store the user's last heartbeat timestamp
+      await redisClient.hSet('user_heartbeats', userId, timestamp);
+      
+      // Also update the user's status
+      await redisClient.hSet(`user:${userId}`, 'last_heartbeat', timestamp);
+      await redisClient.hSet(`user:${userId}`, 'status', 'online');
+      
+      console.log(`Heartbeat recorded for user ${userId} at ${new Date(timestamp).toISOString()}`);
+      return true;
+    } catch (error) {
+      console.error('Redis update user heartbeat error:', error);
+      return false;
+    }
+  },
+  
+  // Check if a user is online based on heartbeat (within last 2 minutes)
+  async isUserOnlineByHeartbeat(userId) {
+    try {
+      const lastHeartbeat = await redisClient.hGet('user_heartbeats', userId);
+      
+      if (!lastHeartbeat) {
+        return false;
+      }
+      
+      const now = Date.now();
+      const heartbeatTime = parseInt(lastHeartbeat, 10);
+      const timeDiff = now - heartbeatTime;
+      
+      // Consider user online if heartbeat was within last 2 minutes (120,000 ms)
+      const isOnline = timeDiff < 120000; // 2 minutes
+      
+      console.log(`User ${userId} heartbeat check: last=${new Date(heartbeatTime).toISOString()}, diff=${Math.round(timeDiff/1000)}s, online=${isOnline}`);
+      return isOnline;
+    } catch (error) {
+      console.error('Redis check user online by heartbeat error:', error);
+      return false;
+    }
+  },
+  
+  // Get all online users based on heartbeat
+  async getOnlineUsersByHeartbeat() {
+    try {
+      const allHeartbeats = await redisClient.hGetAll('user_heartbeats');
+      const now = Date.now();
+      const onlineUsers = [];
+      
+      for (const [userId, timestamp] of Object.entries(allHeartbeats)) {
+        const timeDiff = now - parseInt(timestamp, 10);
+        if (timeDiff < 120000) { // 2 minutes
+          onlineUsers.push(userId);
+        }
+      }
+      
+      return onlineUsers;
+    } catch (error) {
+      console.error('Redis get online users by heartbeat error:', error);
+      return [];
+    }
+  },
+  
+  // Clean up old heartbeat entries (optional maintenance function)
+  async cleanupOldHeartbeats() {
+    try {
+      const allHeartbeats = await redisClient.hGetAll('user_heartbeats');
+      const now = Date.now();
+      const oldEntries = [];
+      
+      for (const [userId, timestamp] of Object.entries(allHeartbeats)) {
+        const timeDiff = now - parseInt(timestamp, 10);
+        // Remove entries older than 24 hours
+        if (timeDiff > 86400000) {
+          oldEntries.push(userId);
+        }
+      }
+      
+      if (oldEntries.length > 0) {
+        await redisClient.hDel('user_heartbeats', ...oldEntries);
+        console.log(`Cleaned up ${oldEntries.length} old heartbeat entries`);
+      }
+      
+      return oldEntries.length;
+    } catch (error) {
+      console.error('Redis cleanup old heartbeats error:', error);
+      return 0;
+    }
+  },
+  
+  // Immediately mark user as offline (for logout)
+  async markUserOfflineImmediately(userId) {
+    try {
+      // Remove user's heartbeat entry completely
+      await redisClient.hDel('user_heartbeats', userId);
+      
+      // Update their status to offline
+      await redisClient.hSet(`user:${userId}`, 'status', 'offline');
+      await redisClient.hSet(`user:${userId}`, 'last_logout', Date.now());
+      
+      console.log(`User ${userId} marked as offline immediately (logout)`);
+      return true;
+    } catch (error) {
+      console.error('Redis mark user offline immediately error:', error);
+      return false;
+    }
   }
 };
 
