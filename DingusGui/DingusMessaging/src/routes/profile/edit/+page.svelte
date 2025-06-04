@@ -35,11 +35,9 @@
             });
 
             if (response.ok) {
-                // Update the user store with the new display name
                 user.update(u => u ? { ...u, display_name: displayName } : null);
                 successMessage = 'Profile updated successfully!';
 
-                // Navigate back to dashboard after a brief delay
                 setTimeout(() => {
                     goto('/dashboard');
                 }, 1500);
