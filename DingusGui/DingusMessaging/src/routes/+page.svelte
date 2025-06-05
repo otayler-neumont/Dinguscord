@@ -58,7 +58,8 @@
                 });
                 
                 if (result.success) {
-                    await goto('/dashboard');
+                    
+                    window.location.href = '/dashboard';
                 } else {
                     errorMessage = result.message || 'Registration failed';
                 }
